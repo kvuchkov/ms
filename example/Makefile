@@ -12,11 +12,11 @@ model: idl/model.proto
 	protoc --go_out=./model --go_opt=paths=source_relative idl/model.proto --proto_path=idl
 
 load-list:
-	go run ./load list > ./reports/list.html
+	go run ./load list html > ./reports/list.html
 
 load-create:
-	go run ./load create > ./reports/create.html
+	go run ./load create html > ./reports/create.html
 
 load-complete:
-	go run ./load complete > ./reports/complete.html
+	go run ./load complete html > ./reports/complete.html
 

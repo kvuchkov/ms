@@ -31,26 +31,28 @@ var customers = []string{
 }
 
 const (
-	format      = "html"
 	total       = 1000
 	rps         = 100
 	concurrency = 2
 )
 
 func main() {
+	if len(os.Args) != 3 {
+		log.Fatal("Usage: load [list|create|complete] [format]")
+	}
 	switch os.Args[1] {
 	case "create":
-		create()
+		create(os.Args[2])
 	case "complete":
-		complete()
+		complete(os.Args[2])
 	case "list":
-		list()
+		list(os.Args[2])
 	default:
 		log.Fatal("Unknown command ", os.Args[1])
 	}
 }
 
-func create() {
+func create(format string) {
 	report, err := runner.Run(
 		"example.api.OrderService.CreateOrder",
 		"localhost:8001",
@@ -74,7 +76,7 @@ func create() {
 	printer.Print(format)
 }
 
-func complete() {
+func complete(format string) {
 	conn, err := grpc.Dial("localhost:8001", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatal(err)
@@ -134,7 +136,7 @@ func complete() {
 	printer.Print(format)
 }
 
-func list() {
+func list(format string) {
 	report, err := runner.Run(
 		"example.api.OrderService.ListOrders",
 		"localhost:8001",
