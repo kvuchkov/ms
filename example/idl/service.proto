@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package example.api;
+
+import "google/protobuf/empty.proto";
+import "model.proto";
+option go_package = "github.com/kvuchkov/ms-thesis-grpcp/example/api";
+
+// force
+
+service OrderService {
+  // ListOrders is called by the online store to retrieve a page of orders for a customer
+  // and by the shipping system to retrieve orders pending delivery
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse) {
+  }
+
+  // GetOrder is called by both the online store and the shipping system to retrieve order details.
+  rpc GetOrder(GetOrderRequest) returns (example.model.Order) {
+  }
+
+  // CreateOrder is called by the shopping cart system after successful checkout.
+  rpc CreateOrder(CreateOrderRequest) returns (example.model.Order) {
+  }
+
+  // ShipOrder is called by the payment system after successful payment processing.
+  rpc ShipOrder(ShipOrderRequest) returns (example.model.Order) {
+  }
+
+  // CompleteOrder is called by the shipping system after successful order delivery.
+  rpc CompleteOrder(CompleteOrderRequest) returns (example.model.Order) {
+  }
+
+  // CancelOrder is called by the online store to cancel an order on behalf of the customer
+  // or by the shipping system to cancel an order that cannot be delivered
+  // or by the payment system to cancel an order that cannot be paid for.
+  rpc CancelOrder(CancelOrderRequest) returns (example.model.Order) {
+  }
+
+  rpc DeleteOrder(DeleteOrderRequest) returns (google.protobuf.Empty) {
+  }
+}
+
+
+message ListOrdersRequest {
+  int32 page_size = 1;
+  optional string page_token = 2;
+  optional string customer_id = 3;
+}
+
+message ListOrdersResponse {
+  repeated example.model.Order orders = 1;
+  optional string next_page_token = 2;
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message CreateOrderRequest {
+  string id = 1;
+  string customer_id = 2;
+  repeated example.model.OrderItem items = 3;
+  example.model.Payment payment = 4;
+  example.model.Shipment shipment = 5;
+}
+
+message CompleteOrderRequest {
+  string id = 1;
+}
+
+message DeleteOrderRequest {
+  string id = 1;
+}
+
+message ShipOrderRequest {
+  string id = 1;
+  string tracking_id = 2;
+}
+
+message CancelOrderRequest {
+  string id = 1;
+  example.model.CancelReason reason = 2;
+}

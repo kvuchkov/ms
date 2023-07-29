@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package example.model;
+
+option go_package = "github.com/kvuchkov/ms-thesis-grpcp/example/model";
+
+// force
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  // The order has been created but not yet paid for.
+  ORDER_STATUS_NEW = 1;
+  // The order has been paid for but not yet shipped.
+  ORDER_STATUS_PAID = 2;
+  // The order has been shipped but not yet delivered.
+  ORDER_STATUS_SHIPPED = 3;
+  // The order has been delivered.
+  ORDER_STATUS_COMPLETED = 4;
+  // The order has been cancelled.
+  ORDER_STATUS_CANCELLED = 5;
+}
+
+enum CancelReason {
+  CANCEL_REASON_UNSPECIFIED = 0;
+  // The customer requested the cancellation.
+  CANCEL_REASON_CUSTOMER_REQUESTED = 1;
+  // The order could not be fulfilled because the product is out of stock.
+  CANCEL_REASON_OUT_OF_STOCK = 2;
+  // The order could not be fulfilled because the payment failed.
+  CANCEL_REASON_PAYMENT_FAILED = 3;
+  // The order could not be fulfilled because the shipping failed.
+  CANCEL_REASON_SHIPPING_FAILED = 4;
+}
+
+message Order {
+  string id = 1;
+  string customer_id = 2;
+  OrderStatus status = 3;
+  optional CancelReason cancel_reason = 4;
+  Breakdown breakdown = 5;
+  Shipment shipment = 6;
+  Payment payment = 7;
+  repeated OrderItem items = 10;
+}
+
+message OrderItem {
+  string product_id = 1;
+  int32 product_version = 2;
+  string product_summary = 3;
+  int32 quantity = 4;
+  Money price_per_unit = 5;
+}
+
+message Money {
+  int32 amount_e2 = 1;
+  string currency_code = 2;
+}
+
+message Breakdown {
+  Money subtotal = 1;
+  Money tax = 2;
+  Money total = 3;
+}
+
+message Shipment {
+  string method_id = 1;
+  string tracking_id = 2;
+  Money price = 3;
+}
+
+message Payment {
+  string method_id = 1;
+}
