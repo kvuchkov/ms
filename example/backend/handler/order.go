@@ -2,15 +2,14 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/kvuchkov/ms-thesis-grpcp/example/api"
 	"github.com/kvuchkov/ms-thesis-grpcp/example/model"
 	"github.com/oklog/ulid/v2"
+	"go.etcd.io/bbolt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -18,59 +17,68 @@ import (
 
 type Order struct {
 	api.UnimplementedOrderServiceServer
-	DB *pebble.DB
+	Db *bbolt.DB
 }
 
 func (h *Order) ListOrders(ctx context.Context, rq *api.ListOrdersRequest) (*api.ListOrdersResponse, error) {
 	var orders []*model.Order
 	var last *string
-	var lb []byte
-	if rq.PageToken != nil {
-		lb = []byte(*rq.PageToken)
-	} else if rq.CustomerId != nil {
-		lb = key(*rq.CustomerId, "")
-	} else {
-		lb = []byte("order/")
-	}
-	it := h.DB.NewIter(&pebble.IterOptions{
-		LowerBound: lb,
-	})
-	defer it.Close()
-	var more bool
-	for more = it.First(); more; more = it.Next() {
-		order := &model.Order{}
-		value, err := it.ValueAndErr()
-		if err != nil {
-			return nil, fmt.Errorf("cannot iterate over orders: %w", err)
+	err := h.Db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("orders"))
+		if b == nil {
+			return fmt.Errorf("bucket not found")
 		}
-		err = proto.Unmarshal(value, order)
-		if err != nil {
-			return nil, fmt.Errorf("cannot unmarshal order: %w", err)
+		c := b.Cursor()
+		var key, value []byte
+		if rq.PageToken != nil {
+			key, value = c.Seek([]byte(*rq.PageToken))
+		} else if rq.CustomerId != nil {
+			key, value = c.Seek(makeKey(*rq.CustomerId, ""))
+		} else {
+			key, value = c.Seek([]byte("order/"))
 		}
-		if rq.CustomerId != nil && order.CustomerId != *rq.CustomerId {
-			continue
-		}
-		orders = append(orders, order)
-		if len(orders) == int(rq.PageSize) {
-			if it.Next() {
-				last = proto.String(string(it.Key()))
+
+		for ; key != nil; key, value = c.Next() {
+			order := &model.Order{}
+			err := proto.Unmarshal(value, order)
+			if err != nil {
+				return fmt.Errorf("cannot unmarshal order: %w", err)
 			}
-			break
+			if rq.CustomerId != nil && order.CustomerId != *rq.CustomerId {
+				continue
+			}
+			orders = append(orders, order)
+			if len(orders) == int(rq.PageSize) {
+				key, _ := c.Next()
+				if key != nil {
+					last = proto.String(string(key))
+				}
+				break
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot read orders from db: %w", err)
 	}
 	if len(orders) == 0 {
 		return nil, status.Errorf(codes.NotFound, "no orders found")
 	}
 	return &api.ListOrdersResponse{Orders: orders, NextPageToken: last}, nil
 }
-func (h *Order) GetOrder(ctx context.Context, rq *api.GetOrderRequest) (*model.Order, error) {
-	order, err := h.getOrder(rq.Id)
-	if errors.Is(err, pebble.ErrNotFound) {
+func (h *Order) GetOrder(ctx context.Context, rq *api.GetOrderRequest) (order *model.Order, err error) {
+	err = h.Db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("orders"))
+		if b == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		order, err = getOrder(b, rq.GetId())
+		return err
+	})
+	if order == nil {
 		return nil, status.Errorf(codes.NotFound, "order not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("cannot get order: %w", err)
 	}
-	return order, nil
+	return order, err
 }
 func (h *Order) CreateOrder(ctx context.Context, rq *api.CreateOrderRequest) (*model.Order, error) {
 	var orderID ulid.ULID
@@ -98,65 +106,68 @@ func (h *Order) CreateOrder(ctx context.Context, rq *api.CreateOrderRequest) (*m
 	}
 	order.Breakdown.Tax.AmountE2 = int32(math.Round(float64(order.Breakdown.Subtotal.AmountE2) * 0.2))
 	order.Breakdown.Total.AmountE2 = order.Breakdown.Subtotal.AmountE2 + order.Breakdown.Tax.AmountE2
-	data, err := proto.Marshal(order)
-	if err != nil {
-		return nil, fmt.Errorf("cannot serialize order: %w", err)
-	}
-	batch := h.DB.NewBatch()
-	batch.Set(key(order.CustomerId, order.Id), data, nil)
+	err = h.Db.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("orders"))
+		if err != nil {
+			return fmt.Errorf("cannot create data bucket: %w", err)
+		}
+		data, err := proto.Marshal(order)
+		if err != nil {
+			return fmt.Errorf("cannot serialize order: %w", err)
+		}
+		err = b.Put(makeKey(order.CustomerId, order.Id), data)
+		if err != nil {
+			return fmt.Errorf("cannot put order: %w", err)
+		}
+		err = b.Put([]byte("customer/"+order.Id), []byte(order.CustomerId))
+		if err != nil {
+			return fmt.Errorf("cannot put index: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot create order: %w", err)
-	}
-
-	err = batch.Set([]byte("customer/"+order.Id), []byte(order.CustomerId), nil)
-	if err != nil {
-		return nil, fmt.Errorf("cannot index order: %w", err)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cannot create order: %w", err)
-	}
-	if err = batch.Commit(pebble.Sync); err != nil {
-		return nil, fmt.Errorf("cannot commit order: %w", err)
 	}
 	return order, nil
 }
-func (h *Order) CompleteOrder(ctx context.Context, rq *api.CompleteOrderRequest) (*model.Order, error) {
-	order, err := h.getOrder(rq.Id)
-	if errors.Is(err, pebble.ErrNotFound) {
+func (h *Order) CompleteOrder(ctx context.Context, rq *api.CompleteOrderRequest) (order *model.Order, err error) {
+	err = h.Db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("orders"))
+		if b == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		order, err = getOrder(b, rq.GetId())
+		if err != nil {
+			return err
+		}
+		order.Status = model.OrderStatus_ORDER_STATUS_COMPLETED
+		data, err := proto.Marshal(order)
+		if err != nil {
+			return fmt.Errorf("cannot serialize order: %w", err)
+		}
+		return tx.Bucket([]byte("orders")).Put(makeKey(order.CustomerId, order.Id), data)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot read order from db: %w", err)
+	} else if order == nil {
 		return nil, status.Errorf(codes.NotFound, "order not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("cannot get order: %w", err)
-	}
-	order.Status = model.OrderStatus_ORDER_STATUS_COMPLETED
-	data, err := proto.Marshal(order)
-	if err != nil {
-		return nil, fmt.Errorf("cannot serialize order: %w", err)
-	}
-	err = h.DB.Set(key(order.CustomerId, order.Id), data, pebble.Sync)
-	if err != nil {
-		return nil, fmt.Errorf("cannot complete order: %w", err)
 	}
 	return order, nil
 }
-func key(customerID, orderID string) []byte {
+func makeKey(customerID, orderID string) []byte {
 	return []byte("order/" + customerID + "/" + orderID)
 }
-func (h *Order) getOrder(id string) (*model.Order, error) {
-	// loookup
-	indexValue, closer, err := h.DB.Get([]byte("customer/" + id))
-	if err != nil {
-		return nil, fmt.Errorf("cannot get order: %w", err)
+func getOrder(b *bbolt.Bucket, id string) (*model.Order, error) {
+	customerId := b.Get([]byte("customer/" + id))
+	if customerId == nil {
+		return nil, nil
 	}
-	orderKey := key(string(indexValue), id)
-	closer.Close()
-
-	// load
-	value, closer, err := h.DB.Get(orderKey)
-	if err != nil {
-		return nil, fmt.Errorf("cannot get order: %w", err)
+	value := b.Get(makeKey(string(customerId), id))
+	if value == nil {
+		return nil, nil
 	}
 	order := &model.Order{}
-	err = proto.Unmarshal(value, order)
+	err := proto.Unmarshal(value, order)
 	if err != nil {
 		return nil, fmt.Errorf("cannot unmarshal order: %w", err)
 	}

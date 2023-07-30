@@ -4,9 +4,9 @@ import (
 	"log"
 	"net"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/kvuchkov/ms-thesis-grpcp/example/api"
 	"github.com/kvuchkov/ms-thesis-grpcp/example/backend/handler"
+	"go.etcd.io/bbolt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -19,13 +19,13 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	db, err := pebble.Open("./data", &pebble.Options{})
+	db, err := bbolt.Open("./data.bin", 0600, bbolt.DefaultOptions)
 	if err != nil {
 		log.Fatalf("Cannot open db: %+v", err)
 	}
 	server := grpc.NewServer()
 	reflection.Register(server)
-	orderHandler := handler.Order{DB: db}
+	orderHandler := handler.Order{Db: db}
 	api.RegisterOrderServiceServer(server, &orderHandler)
 	log.Printf("Listening on %s...", addr)
 	err = server.Serve(lis)
